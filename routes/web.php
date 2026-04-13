@@ -1,0 +1,31 @@
+<?php
+
+use App\Http\Controllers\Admin\ImportController;
+use App\Http\Controllers\Admin\LotteryController as AdminLotteryController;
+use App\Http\Controllers\LotteryController;
+use App\Http\Controllers\LotteryTicketController;
+use Illuminate\Support\Facades\Route;
+
+Route::get('/', [LotteryController::class, 'index'])->name('home');
+Route::get('/lotteries/{lottery}', [LotteryController::class, 'show'])->name('lotteries.show');
+Route::post('/lotteries/{lottery}/check', [LotteryTicketController::class, 'check'])->name('lotteries.check');
+
+Route::middleware(['auth', 'verified'])->group(function () {
+    Route::redirect('dashboard', '/admin/lotteries')->name('dashboard');
+});
+
+Route::middleware(['auth', 'verified'])->prefix('admin')->name('admin.')->group(function () {
+    Route::get('lotteries', [AdminLotteryController::class, 'index'])->name('lotteries.index');
+    Route::get('lotteries/create', [AdminLotteryController::class, 'create'])->name('lotteries.create');
+    Route::post('lotteries', [AdminLotteryController::class, 'store'])->name('lotteries.store');
+    Route::get('lotteries/{lottery}/edit', [AdminLotteryController::class, 'edit'])->name('lotteries.edit');
+    Route::put('lotteries/{lottery}', [AdminLotteryController::class, 'update'])->name('lotteries.update');
+    Route::post('lotteries/{lottery}/toggle', [AdminLotteryController::class, 'toggle'])->name('lotteries.toggle');
+    Route::post('lotteries/{lottery}/images', [AdminLotteryController::class, 'uploadImages'])->name('lotteries.images.store');
+    Route::delete('lotteries/images/{lotteryImage}', [AdminLotteryController::class, 'deleteImage'])->name('lotteries.images.destroy');
+    Route::get('lotteries/{lottery}/import', [ImportController::class, 'show'])->name('lotteries.import');
+    Route::post('lotteries/{lottery}/import', [ImportController::class, 'store'])->name('lotteries.import.store');
+    Route::delete('lotteries/{lottery}/import', [ImportController::class, 'destroy'])->name('lotteries.import.destroy');
+});
+
+require __DIR__.'/settings.php';
