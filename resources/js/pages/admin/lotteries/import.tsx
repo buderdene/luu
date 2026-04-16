@@ -1,6 +1,6 @@
 import { Form, Head, router } from '@inertiajs/react';
-import { Upload, FileSpreadsheet, Trash2 } from 'lucide-react';
-import { useRef } from 'react';
+import { Upload, FileSpreadsheet, Trash2, ArrowUpDown, ArrowUp, ArrowDown, Search, ChevronLeft, ChevronRight, Ban, RotateCcw } from 'lucide-react';
+import { useRef, useMemo, useState, useCallback } from 'react';
 import Heading from '@/components/heading';
 import { Button } from '@/components/ui/button';
 import {
@@ -27,6 +27,10 @@ type Lottery = {
     sold_tickets: number;
     tickets_count: number;
     price_per_ticket: number;
+    total_amount: number;
+    excluded_count: number;
+    active_count: number;
+    transactions_count: number;
 };
 
 type Ticket = {
@@ -43,6 +47,7 @@ type Transaction = {
     amount: number;
     description: string;
     transacted_at: string;
+    is_excluded: boolean;
 };
 
 type BankEntry = {
@@ -50,6 +55,7 @@ type BankEntry = {
     phone: string;
     amount: number;
     ticket_number: number | null;
+    is_excluded: boolean;
     created_at: string;
     transaction?: {
         id: number;
@@ -59,11 +65,27 @@ type BankEntry = {
     };
 };
 
+type PaginatedData<T> = {
+    data: T[];
+    current_page: number;
+    last_page: number;
+    per_page: number;
+    total: number;
+    from: number | null;
+    to: number | null;
+    links: { url: string | null; label: string; active: boolean }[];
+};
+
 type Props = {
     lottery: Lottery;
-    recentTickets: Ticket[];
-    recentTransactions: Transaction[];
-    bankEntries: BankEntry[];
+    recentTickets: PaginatedData<Ticket>;
+    recentTransactions: PaginatedData<Transaction>;
+    bankEntries: PaginatedData<BankEntry>;
+    filters: {
+        search: string;
+        bank_search: string;
+        status: string;
+    };
 };
 
 export default function AdminLotteryImport({
@@ -71,8 +93,117 @@ export default function AdminLotteryImport({
     recentTickets,
     recentTransactions,
     bankEntries,
+    filters,
 }: Props) {
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const [sortKey, setSortKey] = useState<'ticket_number' | 'phone' | 'amount' | null>(null);
+    const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+    const [searchValue, setSearchValue] = useState(filters.search ?? '');
+    const [bankSearchValue, setBankSearchValue] = useState(filters.bank_search ?? '');
+    const [statusFilter, setStatusFilter] = useState(filters.status ?? '');
+    const searchTimeout = useRef<ReturnType<typeof setTimeout>>();
+    const bankSearchTimeout = useRef<ReturnType<typeof setTimeout>>();
+
+    const handleSearch = useCallback((value: string) => {
+        setSearchValue(value);
+        clearTimeout(searchTimeout.current);
+        searchTimeout.current = setTimeout(() => {
+            router.get(
+                `/admin/lotteries/${lottery.id}/import`,
+                { search: value || undefined, bank_search: bankSearchValue || undefined, status: statusFilter || undefined },
+                { preserveState: true, replace: true },
+            );
+        }, 300);
+    }, [lottery.id, bankSearchValue, statusFilter]);
+
+    const handleBankSearch = useCallback((value: string) => {
+        setBankSearchValue(value);
+        clearTimeout(bankSearchTimeout.current);
+        bankSearchTimeout.current = setTimeout(() => {
+            router.get(
+                `/admin/lotteries/${lottery.id}/import`,
+                { search: searchValue || undefined, bank_search: value || undefined, status: statusFilter || undefined },
+                { preserveState: true, replace: true },
+            );
+        }, 300);
+    }, [lottery.id, searchValue, statusFilter]);
+
+    const handleStatusFilter = (value: string) => {
+        setStatusFilter(value);
+        router.get(
+            `/admin/lotteries/${lottery.id}/import`,
+            { search: searchValue || undefined, bank_search: bankSearchValue || undefined, status: value || undefined },
+            { preserveState: true, replace: true },
+        );
+    };
+
+    const toggleSort = (key: 'ticket_number' | 'phone' | 'amount') => {
+        if (sortKey === key) {
+            setSortDir((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+        } else {
+            setSortKey(key);
+            setSortDir('asc');
+        }
+    };
+
+    const sortedBankEntries = useMemo(() => {
+        if (!sortKey) return bankEntries.data;
+        return [...bankEntries.data].sort((a, b) => {
+            let aVal = a[sortKey];
+            let bVal = b[sortKey];
+            if (aVal === null || aVal === undefined) aVal = sortDir === 'asc' ? Infinity : -Infinity;
+            if (bVal === null || bVal === undefined) bVal = sortDir === 'asc' ? Infinity : -Infinity;
+            if (typeof aVal === 'string') {
+                return sortDir === 'asc' ? aVal.localeCompare(bVal as string) : (bVal as string).localeCompare(aVal);
+            }
+            return sortDir === 'asc' ? (aVal as number) - (bVal as number) : (bVal as number) - (aVal as number);
+        });
+    }, [bankEntries.data, sortKey, sortDir]);
+
+    const SortIcon = ({ column }: { column: string }) => {
+        if (sortKey !== column) return <ArrowUpDown className="ml-1 inline h-3 w-3 opacity-40" />;
+        return sortDir === 'asc' ? <ArrowUp className="ml-1 inline h-3 w-3" /> : <ArrowDown className="ml-1 inline h-3 w-3" />;
+    };
+
+    const PaginationControls = ({ paginator, paramName }: { paginator: PaginatedData<unknown>; paramName: string }) => {
+        if (paginator.last_page <= 1) return null;
+        return (
+            <div className="flex items-center justify-between pt-4">
+                <p className="text-sm text-muted-foreground">
+                    {paginator.from}–{paginator.to} / {paginator.total}
+                </p>
+                <div className="flex items-center gap-1">
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={paginator.current_page <= 1}
+                        onClick={() => router.get(
+                            `/admin/lotteries/${lottery.id}/import`,
+                            { ...Object.fromEntries(new URLSearchParams(window.location.search)), [paramName]: paginator.current_page - 1 },
+                            { preserveState: true, replace: true },
+                        )}
+                    >
+                        <ChevronLeft className="h-4 w-4" />
+                    </Button>
+                    <span className="px-2 text-sm">
+                        {paginator.current_page} / {paginator.last_page}
+                    </span>
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={paginator.current_page >= paginator.last_page}
+                        onClick={() => router.get(
+                            `/admin/lotteries/${lottery.id}/import`,
+                            { ...Object.fromEntries(new URLSearchParams(window.location.search)), [paramName]: paginator.current_page + 1 },
+                            { preserveState: true, replace: true },
+                        )}
+                    >
+                        <ChevronRight className="h-4 w-4" />
+                    </Button>
+                </div>
+            </div>
+        );
+    };
 
     const formatDate = (dateStr: string) => {
         return new Date(dateStr).toLocaleDateString('mn-MN', {
@@ -110,7 +241,7 @@ export default function AdminLotteryImport({
                 </div>
 
                 {/* Stats */}
-                <div className="grid gap-4 sm:grid-cols-3">
+                <div className="grid gap-4 sm:grid-cols-3 lg:grid-cols-6">
                     <Card>
                         <CardHeader className="pb-2">
                             <CardDescription>Нийт сугалаа</CardDescription>
@@ -137,14 +268,48 @@ export default function AdminLotteryImport({
                     </Card>
                     <Card>
                         <CardHeader className="pb-2">
-                            <CardDescription>Нэгж үнэ</CardDescription>
+                            <CardDescription>Нийт дүн</CardDescription>
                         </CardHeader>
                         <CardContent>
                             <p className="text-2xl font-bold">
-                                {new Intl.NumberFormat('mn-MN').format(
-                                    lottery.price_per_ticket,
-                                )}
-                                ₮
+                                {new Intl.NumberFormat('mn-MN').format(lottery.total_amount)}
+                                <span className="text-sm font-normal text-muted-foreground">₮</span>
+                            </p>
+                        </CardContent>
+                    </Card>
+                    <Card>
+                        <CardHeader className="pb-2">
+                            <CardDescription>Гүйлгээ</CardDescription>
+                        </CardHeader>
+                        <CardContent>
+                            <p className="text-2xl font-bold">
+                                {lottery.transactions_count}
+                            </p>
+                        </CardContent>
+                    </Card>
+                    <Card>
+                        <CardHeader className="pb-2">
+                            <CardDescription className="flex items-center gap-1">
+                                <span className="inline-block size-2 rounded-full bg-green-500" />
+                                Идэвхтэй
+                            </CardDescription>
+                        </CardHeader>
+                        <CardContent>
+                            <p className="text-2xl font-bold text-green-600 dark:text-green-400">
+                                {lottery.active_count}
+                            </p>
+                        </CardContent>
+                    </Card>
+                    <Card>
+                        <CardHeader className="pb-2">
+                            <CardDescription className="flex items-center gap-1">
+                                <span className="inline-block size-2 rounded-full bg-gray-400" />
+                                Цуцлагдсан
+                            </CardDescription>
+                        </CardHeader>
+                        <CardContent>
+                            <p className="text-2xl font-bold text-muted-foreground">
+                                {lottery.excluded_count}
                             </p>
                         </CardContent>
                     </Card>
@@ -199,13 +364,49 @@ export default function AdminLotteryImport({
                     </CardContent>
                 </Card>
 
+                {/* Search & Filter */}
+                <div className="flex flex-wrap items-center gap-3">
+                    <div className="relative max-w-sm flex-1">
+                        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                        <Input
+                            placeholder="Утас, дугаар, лавлах..."
+                            value={searchValue}
+                            onChange={(e) => handleSearch(e.target.value)}
+                            className="pl-9"
+                        />
+                    </div>
+                    <div className="flex items-center gap-1">
+                        <Button
+                            variant={statusFilter === '' ? 'default' : 'outline'}
+                            size="sm"
+                            onClick={() => handleStatusFilter('')}
+                        >
+                            Бүгд
+                        </Button>
+                        <Button
+                            variant={statusFilter === 'active' ? 'default' : 'outline'}
+                            size="sm"
+                            onClick={() => handleStatusFilter('active')}
+                        >
+                            Идэвхтэй
+                        </Button>
+                        <Button
+                            variant={statusFilter === 'excluded' ? 'default' : 'outline'}
+                            size="sm"
+                            onClick={() => handleStatusFilter('excluded')}
+                        >
+                            Сугалаа биш
+                        </Button>
+                    </div>
+                </div>
+
                 {/* Recent Transactions */}
-                {recentTransactions.length > 0 && (
+                {recentTransactions.data.length > 0 && (
                     <Card>
                         <CardHeader>
                             <CardTitle>Сүүлийн гүйлгээнүүд</CardTitle>
                             <CardDescription>
-                                Сүүлд импорт хийсэн 20 гүйлгээ
+                                Нийт {recentTransactions.total} гүйлгээ
                             </CardDescription>
                         </CardHeader>
                         <CardContent>
@@ -217,11 +418,13 @@ export default function AdminLotteryImport({
                                         <TableHead>Дүн</TableHead>
                                         <TableHead>Гүйлгээний утга</TableHead>
                                         <TableHead>Огноо</TableHead>
+                                        <TableHead>Төлөв</TableHead>
+                                        <TableHead className="w-[80px]">Үйлдэл</TableHead>
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
-                                    {recentTransactions.map((tx) => (
-                                        <TableRow key={tx.id}>
+                                    {recentTransactions.data.map((tx) => (
+                                        <TableRow key={tx.id} className={tx.is_excluded ? 'opacity-40' : ''}>
                                             <TableCell className="font-mono text-xs">
                                                 {tx.bank_reference}
                                             </TableCell>
@@ -238,40 +441,87 @@ export default function AdminLotteryImport({
                                             <TableCell className="text-xs">
                                                 {tx.transacted_at ? formatDate(tx.transacted_at) : '—'}
                                             </TableCell>
+                                            <TableCell>
+                                                {tx.is_excluded ? (
+                                                    <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-500 dark:bg-gray-800 dark:text-gray-400">
+                                                        Цуцлагдсан
+                                                    </span>
+                                                ) : (
+                                                    <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700 dark:bg-green-900/30 dark:text-green-400">
+                                                        Идэвхтэй
+                                                    </span>
+                                                )}
+                                            </TableCell>
+                                            <TableCell>
+                                                <Button
+                                                    variant="ghost"
+                                                    size="sm"
+                                                    className="h-7 px-2"
+                                                    onClick={() => router.post(`/admin/lotteries/${lottery.id}/transactions/${tx.id}/toggle-exclude`, {}, { preserveState: true })}
+                                                >
+                                                    {tx.is_excluded ? (
+                                                        <RotateCcw className="h-3.5 w-3.5 text-green-600" />
+                                                    ) : (
+                                                        <Ban className="h-3.5 w-3.5 text-destructive" />
+                                                    )}
+                                                </Button>
+                                            </TableCell>
                                         </TableRow>
                                     ))}
                                 </TableBody>
                             </Table>
+                            <PaginationControls paginator={recentTransactions} paramName="transactions_page" />
                         </CardContent>
                     </Card>
                 )}
 
                 {/* Bank Entries */}
-                {bankEntries.length > 0 && (
+                {(bankEntries.data.length > 0 || bankSearchValue) && (
                     <Card>
                         <CardHeader>
-                            <CardTitle>Сугалааны банк</CardTitle>
-                            <CardDescription>
-                                Гүйлгээг {new Intl.NumberFormat('mn-MN').format(lottery.price_per_ticket)}₮ тутамд хувааж сугалаа үүсгэсэн
-                            </CardDescription>
+                            <div className="flex items-center justify-between gap-4">
+                                <div>
+                                    <CardTitle>Сугалааны банк</CardTitle>
+                                    <CardDescription>
+                                        Нийт {bankEntries.total} бүртгэл — {new Intl.NumberFormat('mn-MN').format(lottery.price_per_ticket)}₮ тутамд сугалаа үүсгэсэн
+                                    </CardDescription>
+                                </div>
+                                <div className="relative w-64">
+                                    <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                                    <Input
+                                        placeholder="Утас, дансны дугаар..."
+                                        value={bankSearchValue}
+                                        onChange={(e) => handleBankSearch(e.target.value)}
+                                        className="pl-9"
+                                    />
+                                </div>
+                            </div>
                         </CardHeader>
                         <CardContent>
                             <Table>
                                 <TableHeader>
                                     <TableRow>
-                                        <TableHead>Сугалаа</TableHead>
-                                        <TableHead>Утас</TableHead>
-                                        <TableHead>Дүн</TableHead>
+                                        <TableHead className="cursor-pointer select-none" onClick={() => toggleSort('ticket_number')}>
+                                            Сугалаа <SortIcon column="ticket_number" />
+                                        </TableHead>
+                                        <TableHead className="cursor-pointer select-none" onClick={() => toggleSort('phone')}>
+                                            Утас <SortIcon column="phone" />
+                                        </TableHead>
+                                        <TableHead className="cursor-pointer select-none" onClick={() => toggleSort('amount')}>
+                                            Дүн <SortIcon column="amount" />
+                                        </TableHead>
                                         <TableHead>Гүйлгээний утга</TableHead>
                                         <TableHead>Огноо</TableHead>
                                         <TableHead>Төлөв</TableHead>
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
-                                    {bankEntries.map((entry) => (
-                                        <TableRow key={entry.id} className={!entry.ticket_number ? 'bg-yellow-50 dark:bg-yellow-950/20' : ''}>
+                                    {sortedBankEntries.map((entry) => (
+                                        <TableRow key={entry.id} className={entry.is_excluded ? 'opacity-40' : !entry.ticket_number ? 'bg-yellow-50 dark:bg-yellow-950/20' : ''}>
                                             <TableCell className="font-mono font-bold">
-                                                {entry.ticket_number ? (
+                                                {entry.is_excluded ? (
+                                                    <span className="text-muted-foreground line-through">—</span>
+                                                ) : entry.ticket_number ? (
                                                     <span className="text-primary">#{entry.ticket_number}</span>
                                                 ) : (
                                                     <span className="text-muted-foreground">—</span>
@@ -288,7 +538,11 @@ export default function AdminLotteryImport({
                                                 {entry.transaction?.transacted_at ? formatDate(entry.transaction.transacted_at) : '—'}
                                             </TableCell>
                                             <TableCell>
-                                                {entry.ticket_number ? (
+                                                {entry.is_excluded ? (
+                                                    <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-500 dark:bg-gray-800 dark:text-gray-400">
+                                                        Сугалаа биш
+                                                    </span>
+                                                ) : entry.ticket_number ? (
                                                     <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700 dark:bg-green-900/30 dark:text-green-400">
                                                         Сугалаа үүссэн
                                                     </span>
@@ -302,17 +556,18 @@ export default function AdminLotteryImport({
                                     ))}
                                 </TableBody>
                             </Table>
+                            <PaginationControls paginator={bankEntries} paramName="bank_page" />
                         </CardContent>
                     </Card>
                 )}
 
                 {/* Recent Tickets */}
-                {recentTickets.length > 0 && (
+                {recentTickets.data.length > 0 && (
                     <Card>
                         <CardHeader>
-                            <CardTitle>Сүүлийн сугалаанууд</CardTitle>
+                            <CardTitle>Сугалаанууд</CardTitle>
                             <CardDescription>
-                                Сүүлд үүссэн 50 сугалаа
+                                Нийт {recentTickets.total} сугалаа
                             </CardDescription>
                         </CardHeader>
                         <CardContent>
@@ -325,7 +580,7 @@ export default function AdminLotteryImport({
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
-                                    {recentTickets.map((ticket) => (
+                                    {recentTickets.data.map((ticket) => (
                                         <TableRow key={ticket.id}>
                                             <TableCell className="font-mono font-bold">
                                                 #{ticket.ticket_number}
@@ -334,12 +589,13 @@ export default function AdminLotteryImport({
                                                 {ticket.phone}
                                             </TableCell>
                                             <TableCell className="text-xs">
-                                                {ticket.created_at}
+                                                {ticket.created_at?.replace('T', ' ').replace(/\.\d+Z$/, '')}
                                             </TableCell>
                                         </TableRow>
                                     ))}
                                 </TableBody>
                             </Table>
+                            <PaginationControls paginator={recentTickets} paramName="tickets_page" />
                         </CardContent>
                     </Card>
                 )}

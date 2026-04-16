@@ -4,6 +4,9 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\Lottery;
+use App\Models\LotteryBank;
+use App\Models\LotteryTicket;
+use App\Models\Transaction;
 use App\Services\StatementImportService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -12,25 +15,44 @@ use Inertia\Response;
 
 class ImportController extends Controller
 {
-    public function show(Lottery $lottery): Response
+    public function show(Request $request, Lottery $lottery): Response
     {
         $lottery->loadCount('tickets');
 
+        $search = $request->string('search')->trim()->value();
+        $bankSearch = $request->string('bank_search')->trim()->value();
+        $status = $request->string('status')->trim()->value();
+
+        $totalAmount = $lottery->transactions()->sum('amount');
+        $excludedCount = $lottery->bankEntries()->where('is_excluded', true)->count();
+        $activeCount = $lottery->bankEntries()->where('is_excluded', false)->count();
+        $transactionsCount = $lottery->transactions()->count();
+
         $recentTickets = $lottery->tickets()
-            ->latest()
-            ->limit(50)
-            ->get(['id', 'ticket_number', 'phone', 'created_at']);
+            ->when($search, fn ($q) => $q->where('phone', 'like', "%{$search}%")
+                ->orWhere('ticket_number', $search))
+            ->orderBy('ticket_number')
+            ->paginate(50, ['id', 'ticket_number', 'phone', 'created_at'], 'tickets_page')
+            ->withQueryString();
 
         $recentTransactions = $lottery->transactions()
+            ->when($search, fn ($q) => $q->where('phone', 'like', "%{$search}%")
+                ->orWhere('bank_reference', 'like', "%{$search}%")
+                ->orWhere('description', 'like', "%{$search}%"))
             ->latest()
-            ->limit(20)
-            ->get(['id', 'bank_reference', 'phone', 'amount', 'description', 'transacted_at']);
+            ->paginate(20, ['id', 'bank_reference', 'phone', 'amount', 'description', 'transacted_at', 'is_excluded'], 'transactions_page')
+            ->withQueryString();
 
         $bankEntries = $lottery->bankEntries()
             ->with('transaction:id,bank_reference,description,transacted_at')
-            ->latest()
-            ->limit(50)
-            ->get(['id', 'lottery_id', 'transaction_id', 'phone', 'amount', 'ticket_number', 'created_at']);
+            ->when($bankSearch, fn ($q) => $q->where('phone', 'like', "%{$bankSearch}%")
+                ->orWhere('ticket_number', $bankSearch)
+                ->orWhereHas('transaction', fn ($q) => $q->where('bank_reference', 'like', "%{$bankSearch}%")))
+            ->when($status === 'excluded', fn ($q) => $q->where('is_excluded', true))
+            ->when($status === 'active', fn ($q) => $q->where('is_excluded', false))
+            ->orderBy('ticket_number')
+            ->paginate(50, ['id', 'lottery_id', 'transaction_id', 'phone', 'amount', 'ticket_number', 'is_excluded', 'created_at'], 'bank_page')
+            ->withQueryString();
 
         return Inertia::render('admin/lotteries/import', [
             'lottery' => [
@@ -40,10 +62,19 @@ class ImportController extends Controller
                 'sold_tickets' => $lottery->sold_tickets,
                 'tickets_count' => $lottery->tickets_count,
                 'price_per_ticket' => $lottery->price_per_ticket,
+                'total_amount' => $totalAmount,
+                'excluded_count' => $excludedCount,
+                'active_count' => $activeCount,
+                'transactions_count' => $transactionsCount,
             ],
             'recentTickets' => $recentTickets,
             'recentTransactions' => $recentTransactions,
             'bankEntries' => $bankEntries,
+            'filters' => [
+                'search' => $search,
+                'bank_search' => $bankSearch,
+                'status' => $status,
+            ],
         ]);
     }
 
@@ -73,6 +104,148 @@ class ImportController extends Controller
         Inertia::flash('toast', [
             'type' => 'success',
             'message' => 'Бүх гүйлгээ, сугалаа, банкны бүртгэл арилгагдлаа.',
+        ]);
+
+        return back();
+    }
+
+    public function toggleExclude(Lottery $lottery, LotteryBank $lotteryBank): RedirectResponse
+    {
+        $excluding = ! $lotteryBank->is_excluded;
+
+        if ($excluding) {
+            // Remove associated tickets for this bank entry's transaction + phone
+            $ticketNumbers = LotteryBank::where('lottery_id', $lottery->id)
+                ->where('transaction_id', $lotteryBank->transaction_id)
+                ->where('phone', $lotteryBank->phone)
+                ->whereNotNull('ticket_number')
+                ->pluck('ticket_number');
+
+            if ($ticketNumbers->isNotEmpty()) {
+                LotteryTicket::where('lottery_id', $lottery->id)
+                    ->whereIn('ticket_number', $ticketNumbers)
+                    ->delete();
+
+                $lottery->decrement('sold_tickets', $ticketNumbers->count());
+            }
+
+            // Mark all bank entries for same transaction+phone as excluded
+            LotteryBank::where('lottery_id', $lottery->id)
+                ->where('transaction_id', $lotteryBank->transaction_id)
+                ->where('phone', $lotteryBank->phone)
+                ->update(['is_excluded' => true, 'ticket_number' => null]);
+        } else {
+            // Restore: un-exclude all bank entries for same transaction+phone
+            LotteryBank::where('lottery_id', $lottery->id)
+                ->where('transaction_id', $lotteryBank->transaction_id)
+                ->where('phone', $lotteryBank->phone)
+                ->update(['is_excluded' => false]);
+
+            // Re-create tickets
+            $entries = LotteryBank::where('lottery_id', $lottery->id)
+                ->where('transaction_id', $lotteryBank->transaction_id)
+                ->where('phone', $lotteryBank->phone)
+                ->orderBy('id')
+                ->get();
+
+            $nextTicketNumber = ($lottery->tickets()->max('ticket_number') ?? 0) + 1;
+            $totalAmount = $entries->sum('amount');
+            $ticketCount = intdiv($totalAmount, $lottery->price_per_ticket);
+
+            $ticketsCreated = 0;
+            foreach ($entries as $entry) {
+                if ($ticketsCreated >= $ticketCount) {
+                    break;
+                }
+                $entry->update(['ticket_number' => $nextTicketNumber]);
+                LotteryTicket::create([
+                    'lottery_id' => $lottery->id,
+                    'transaction_id' => $lotteryBank->transaction_id,
+                    'ticket_number' => $nextTicketNumber++,
+                    'phone' => $lotteryBank->phone,
+                ]);
+                $ticketsCreated++;
+            }
+
+            if ($ticketsCreated > 0) {
+                $lottery->increment('sold_tickets', $ticketsCreated);
+            }
+        }
+
+        Inertia::flash('toast', [
+            'type' => 'success',
+            'message' => $excluding ? 'Сугалаа биш гэж тэмдэглэлээ.' : 'Сугалаа сэргээлээ.',
+        ]);
+
+        return back();
+    }
+
+    public function toggleTransactionExclude(Lottery $lottery, Transaction $transaction): RedirectResponse
+    {
+        $excluding = ! $transaction->is_excluded;
+
+        if ($excluding) {
+            // Remove associated tickets for all bank entries of this transaction
+            $ticketNumbers = LotteryBank::where('lottery_id', $lottery->id)
+                ->where('transaction_id', $transaction->id)
+                ->whereNotNull('ticket_number')
+                ->pluck('ticket_number');
+
+            if ($ticketNumbers->isNotEmpty()) {
+                LotteryTicket::where('lottery_id', $lottery->id)
+                    ->whereIn('ticket_number', $ticketNumbers)
+                    ->delete();
+
+                $lottery->decrement('sold_tickets', $ticketNumbers->count());
+            }
+
+            // Mark all bank entries for this transaction as excluded
+            LotteryBank::where('lottery_id', $lottery->id)
+                ->where('transaction_id', $transaction->id)
+                ->update(['is_excluded' => true, 'ticket_number' => null]);
+
+            $transaction->update(['is_excluded' => true]);
+        } else {
+            // Restore: un-exclude all bank entries for this transaction
+            LotteryBank::where('lottery_id', $lottery->id)
+                ->where('transaction_id', $transaction->id)
+                ->update(['is_excluded' => false]);
+
+            $transaction->update(['is_excluded' => false]);
+
+            // Re-create tickets
+            $entries = LotteryBank::where('lottery_id', $lottery->id)
+                ->where('transaction_id', $transaction->id)
+                ->orderBy('id')
+                ->get();
+
+            $nextTicketNumber = ($lottery->tickets()->max('ticket_number') ?? 0) + 1;
+            $totalAmount = $entries->sum('amount');
+            $ticketCount = intdiv($totalAmount, $lottery->price_per_ticket);
+
+            $ticketsCreated = 0;
+            foreach ($entries as $entry) {
+                if ($ticketsCreated >= $ticketCount) {
+                    break;
+                }
+                $entry->update(['ticket_number' => $nextTicketNumber]);
+                LotteryTicket::create([
+                    'lottery_id' => $lottery->id,
+                    'transaction_id' => $transaction->id,
+                    'ticket_number' => $nextTicketNumber++,
+                    'phone' => $transaction->phone,
+                ]);
+                $ticketsCreated++;
+            }
+
+            if ($ticketsCreated > 0) {
+                $lottery->increment('sold_tickets', $ticketsCreated);
+            }
+        }
+
+        Inertia::flash('toast', [
+            'type' => 'success',
+            'message' => $excluding ? 'Гүйлгээ цуцлагдлаа.' : 'Гүйлгээ сэргээгдлээ.',
         ]);
 
         return back();

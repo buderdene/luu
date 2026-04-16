@@ -26,6 +26,8 @@ Route::middleware(['auth', 'verified'])->prefix('admin')->name('admin.')->group(
     Route::get('lotteries/{lottery}/import', [ImportController::class, 'show'])->name('lotteries.import');
     Route::post('lotteries/{lottery}/import', [ImportController::class, 'store'])->name('lotteries.import.store');
     Route::delete('lotteries/{lottery}/import', [ImportController::class, 'destroy'])->name('lotteries.import.destroy');
+    Route::post('lotteries/{lottery}/bank/{lotteryBank}/toggle-exclude', [ImportController::class, 'toggleExclude'])->name('lotteries.bank.toggle-exclude');
+    Route::post('lotteries/{lottery}/transactions/{transaction}/toggle-exclude', [ImportController::class, 'toggleTransactionExclude'])->name('lotteries.transactions.toggle-exclude');
 });
 
 require __DIR__.'/settings.php';
