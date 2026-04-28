@@ -1,6 +1,6 @@
-import { Form, Head, router } from '@inertiajs/react';
-import { Upload, FileSpreadsheet, Trash2, ArrowUpDown, ArrowUp, ArrowDown, Search, ChevronLeft, ChevronRight, Ban, RotateCcw } from 'lucide-react';
-import { useRef, useMemo, useState, useCallback } from 'react';
+import { Form, Head, Link, router } from '@inertiajs/react';
+import { Upload, FileSpreadsheet, Trash2, Search, ChevronLeft, ChevronRight, Ban, RotateCcw } from 'lucide-react';
+import { useRef, useState, useCallback } from 'react';
 import Heading from '@/components/heading';
 import { Button } from '@/components/ui/button';
 import {
@@ -33,13 +33,6 @@ type Lottery = {
     transactions_count: number;
 };
 
-type Ticket = {
-    id: number;
-    ticket_number: string;
-    phone: string;
-    created_at: string;
-};
-
 type Transaction = {
     id: number;
     bank_reference: string;
@@ -48,21 +41,6 @@ type Transaction = {
     description: string;
     transacted_at: string;
     is_excluded: boolean;
-};
-
-type BankEntry = {
-    id: number;
-    phone: string;
-    amount: number;
-    ticket_number: number | null;
-    is_excluded: boolean;
-    created_at: string;
-    transaction?: {
-        id: number;
-        bank_reference: string;
-        description: string;
-        transacted_at: string;
-    };
 };
 
 type PaginatedData<T> = {
@@ -78,31 +56,22 @@ type PaginatedData<T> = {
 
 type Props = {
     lottery: Lottery;
-    recentTickets: PaginatedData<Ticket>;
     recentTransactions: PaginatedData<Transaction>;
-    bankEntries: PaginatedData<BankEntry>;
     filters: {
         search: string;
-        bank_search: string;
         status: string;
     };
 };
 
 export default function AdminLotteryImport({
     lottery,
-    recentTickets,
     recentTransactions,
-    bankEntries,
     filters,
 }: Props) {
     const fileInputRef = useRef<HTMLInputElement>(null);
-    const [sortKey, setSortKey] = useState<'ticket_number' | 'phone' | 'amount' | null>(null);
-    const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
     const [searchValue, setSearchValue] = useState(filters.search ?? '');
-    const [bankSearchValue, setBankSearchValue] = useState(filters.bank_search ?? '');
     const [statusFilter, setStatusFilter] = useState(filters.status ?? '');
     const searchTimeout = useRef<ReturnType<typeof setTimeout>>();
-    const bankSearchTimeout = useRef<ReturnType<typeof setTimeout>>();
 
     const handleSearch = useCallback((value: string) => {
         setSearchValue(value);
@@ -110,59 +79,19 @@ export default function AdminLotteryImport({
         searchTimeout.current = setTimeout(() => {
             router.get(
                 `/admin/lotteries/${lottery.id}/import`,
-                { search: value || undefined, bank_search: bankSearchValue || undefined, status: statusFilter || undefined },
+                { search: value || undefined, status: statusFilter || undefined },
                 { preserveState: true, replace: true },
             );
         }, 300);
-    }, [lottery.id, bankSearchValue, statusFilter]);
-
-    const handleBankSearch = useCallback((value: string) => {
-        setBankSearchValue(value);
-        clearTimeout(bankSearchTimeout.current);
-        bankSearchTimeout.current = setTimeout(() => {
-            router.get(
-                `/admin/lotteries/${lottery.id}/import`,
-                { search: searchValue || undefined, bank_search: value || undefined, status: statusFilter || undefined },
-                { preserveState: true, replace: true },
-            );
-        }, 300);
-    }, [lottery.id, searchValue, statusFilter]);
+    }, [lottery.id, statusFilter]);
 
     const handleStatusFilter = (value: string) => {
         setStatusFilter(value);
         router.get(
             `/admin/lotteries/${lottery.id}/import`,
-            { search: searchValue || undefined, bank_search: bankSearchValue || undefined, status: value || undefined },
+            { search: searchValue || undefined, status: value || undefined },
             { preserveState: true, replace: true },
         );
-    };
-
-    const toggleSort = (key: 'ticket_number' | 'phone' | 'amount') => {
-        if (sortKey === key) {
-            setSortDir((prev) => (prev === 'asc' ? 'desc' : 'asc'));
-        } else {
-            setSortKey(key);
-            setSortDir('asc');
-        }
-    };
-
-    const sortedBankEntries = useMemo(() => {
-        if (!sortKey) return bankEntries.data;
-        return [...bankEntries.data].sort((a, b) => {
-            let aVal = a[sortKey];
-            let bVal = b[sortKey];
-            if (aVal === null || aVal === undefined) aVal = sortDir === 'asc' ? Infinity : -Infinity;
-            if (bVal === null || bVal === undefined) bVal = sortDir === 'asc' ? Infinity : -Infinity;
-            if (typeof aVal === 'string') {
-                return sortDir === 'asc' ? aVal.localeCompare(bVal as string) : (bVal as string).localeCompare(aVal);
-            }
-            return sortDir === 'asc' ? (aVal as number) - (bVal as number) : (bVal as number) - (aVal as number);
-        });
-    }, [bankEntries.data, sortKey, sortDir]);
-
-    const SortIcon = ({ column }: { column: string }) => {
-        if (sortKey !== column) return <ArrowUpDown className="ml-1 inline h-3 w-3 opacity-40" />;
-        return sortDir === 'asc' ? <ArrowUp className="ml-1 inline h-3 w-3" /> : <ArrowDown className="ml-1 inline h-3 w-3" />;
     };
 
     const PaginationControls = ({ paginator, paramName }: { paginator: PaginatedData<unknown>; paramName: string }) => {
@@ -238,6 +167,28 @@ export default function AdminLotteryImport({
                         <Trash2 className="mr-2 h-4 w-4" />
                         Бүгдийг арилгах
                     </Button>
+                </div>
+
+                {/* Tab nav */}
+                <div className="flex gap-1 border-b">
+                    <Link
+                        href={`/admin/lotteries/${lottery.id}/import`}
+                        className="border-b-2 border-primary px-4 py-2 text-sm font-medium text-foreground"
+                    >
+                        Гүйлгээ
+                    </Link>
+                    <Link
+                        href={`/admin/lotteries/${lottery.id}/bank`}
+                        className="border-b-2 border-transparent px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground"
+                    >
+                        Сугалааны банк
+                    </Link>
+                    <Link
+                        href={`/admin/lotteries/${lottery.id}/tickets`}
+                        className="border-b-2 border-transparent px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground"
+                    >
+                        Сугалаанууд
+                    </Link>
                 </div>
 
                 {/* Stats */}
@@ -471,131 +422,6 @@ export default function AdminLotteryImport({
                                 </TableBody>
                             </Table>
                             <PaginationControls paginator={recentTransactions} paramName="transactions_page" />
-                        </CardContent>
-                    </Card>
-                )}
-
-                {/* Bank Entries */}
-                {(bankEntries.data.length > 0 || bankSearchValue) && (
-                    <Card>
-                        <CardHeader>
-                            <div className="flex items-center justify-between gap-4">
-                                <div>
-                                    <CardTitle>Сугалааны банк</CardTitle>
-                                    <CardDescription>
-                                        Нийт {bankEntries.total} бүртгэл — {new Intl.NumberFormat('mn-MN').format(lottery.price_per_ticket)}₮ тутамд сугалаа үүсгэсэн
-                                    </CardDescription>
-                                </div>
-                                <div className="relative w-64">
-                                    <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                                    <Input
-                                        placeholder="Утас, дансны дугаар..."
-                                        value={bankSearchValue}
-                                        onChange={(e) => handleBankSearch(e.target.value)}
-                                        className="pl-9"
-                                    />
-                                </div>
-                            </div>
-                        </CardHeader>
-                        <CardContent>
-                            <Table>
-                                <TableHeader>
-                                    <TableRow>
-                                        <TableHead className="cursor-pointer select-none" onClick={() => toggleSort('ticket_number')}>
-                                            Сугалаа <SortIcon column="ticket_number" />
-                                        </TableHead>
-                                        <TableHead className="cursor-pointer select-none" onClick={() => toggleSort('phone')}>
-                                            Утас <SortIcon column="phone" />
-                                        </TableHead>
-                                        <TableHead className="cursor-pointer select-none" onClick={() => toggleSort('amount')}>
-                                            Дүн <SortIcon column="amount" />
-                                        </TableHead>
-                                        <TableHead>Гүйлгээний утга</TableHead>
-                                        <TableHead>Огноо</TableHead>
-                                        <TableHead>Төлөв</TableHead>
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {sortedBankEntries.map((entry) => (
-                                        <TableRow key={entry.id} className={entry.is_excluded ? 'opacity-40' : !entry.ticket_number ? 'bg-yellow-50 dark:bg-yellow-950/20' : ''}>
-                                            <TableCell className="font-mono font-bold">
-                                                {entry.is_excluded ? (
-                                                    <span className="text-muted-foreground line-through">—</span>
-                                                ) : entry.ticket_number ? (
-                                                    <span className="text-primary">#{entry.ticket_number}</span>
-                                                ) : (
-                                                    <span className="text-muted-foreground">—</span>
-                                                )}
-                                            </TableCell>
-                                            <TableCell>{entry.phone}</TableCell>
-                                            <TableCell>
-                                                {new Intl.NumberFormat('mn-MN').format(entry.amount)}₮
-                                            </TableCell>
-                                            <TableCell className="max-w-[200px] truncate text-xs">
-                                                {entry.transaction?.description}
-                                            </TableCell>
-                                            <TableCell className="text-xs">
-                                                {entry.transaction?.transacted_at ? formatDate(entry.transaction.transacted_at) : '—'}
-                                            </TableCell>
-                                            <TableCell>
-                                                {entry.is_excluded ? (
-                                                    <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-500 dark:bg-gray-800 dark:text-gray-400">
-                                                        Сугалаа биш
-                                                    </span>
-                                                ) : entry.ticket_number ? (
-                                                    <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700 dark:bg-green-900/30 dark:text-green-400">
-                                                        Сугалаа үүссэн
-                                                    </span>
-                                                ) : (
-                                                    <span className="rounded-full bg-yellow-100 px-2 py-0.5 text-xs font-medium text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400">
-                                                        Дутуу ({new Intl.NumberFormat('mn-MN').format(lottery.price_per_ticket - entry.amount)}₮)
-                                                    </span>
-                                                )}
-                                            </TableCell>
-                                        </TableRow>
-                                    ))}
-                                </TableBody>
-                            </Table>
-                            <PaginationControls paginator={bankEntries} paramName="bank_page" />
-                        </CardContent>
-                    </Card>
-                )}
-
-                {/* Recent Tickets */}
-                {recentTickets.data.length > 0 && (
-                    <Card>
-                        <CardHeader>
-                            <CardTitle>Сугалаанууд</CardTitle>
-                            <CardDescription>
-                                Нийт {recentTickets.total} сугалаа
-                            </CardDescription>
-                        </CardHeader>
-                        <CardContent>
-                            <Table>
-                                <TableHeader>
-                                    <TableRow>
-                                        <TableHead>Дугаар</TableHead>
-                                        <TableHead>Утас</TableHead>
-                                        <TableHead>Үүссэн</TableHead>
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {recentTickets.data.map((ticket) => (
-                                        <TableRow key={ticket.id}>
-                                            <TableCell className="font-mono font-bold">
-                                                #{ticket.ticket_number}
-                                            </TableCell>
-                                            <TableCell>
-                                                {ticket.phone}
-                                            </TableCell>
-                                            <TableCell className="text-xs">
-                                                {ticket.created_at?.replace('T', ' ').replace(/\.\d+Z$/, '')}
-                                            </TableCell>
-                                        </TableRow>
-                                    ))}
-                                </TableBody>
-                            </Table>
-                            <PaginationControls paginator={recentTickets} paramName="tickets_page" />
                         </CardContent>
                     </Card>
                 )}

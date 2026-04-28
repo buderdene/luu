@@ -20,7 +20,6 @@ class ImportController extends Controller
         $lottery->loadCount('tickets');
 
         $search = $request->string('search')->trim()->value();
-        $bankSearch = $request->string('bank_search')->trim()->value();
         $status = $request->string('status')->trim()->value();
 
         $totalAmount = $lottery->transactions()->sum('amount');
@@ -28,30 +27,14 @@ class ImportController extends Controller
         $activeCount = $lottery->bankEntries()->where('is_excluded', false)->count();
         $transactionsCount = $lottery->transactions()->count();
 
-        $recentTickets = $lottery->tickets()
-            ->when($search, fn ($q) => $q->where('phone', 'like', "%{$search}%")
-                ->orWhere('ticket_number', $search))
-            ->orderBy('ticket_number')
-            ->paginate(50, ['id', 'ticket_number', 'phone', 'created_at'], 'tickets_page')
-            ->withQueryString();
-
         $recentTransactions = $lottery->transactions()
             ->when($search, fn ($q) => $q->where('phone', 'like', "%{$search}%")
                 ->orWhere('bank_reference', 'like', "%{$search}%")
                 ->orWhere('description', 'like', "%{$search}%"))
-            ->latest()
-            ->paginate(20, ['id', 'bank_reference', 'phone', 'amount', 'description', 'transacted_at', 'is_excluded'], 'transactions_page')
-            ->withQueryString();
-
-        $bankEntries = $lottery->bankEntries()
-            ->with('transaction:id,bank_reference,description,transacted_at')
-            ->when($bankSearch, fn ($q) => $q->where('phone', 'like', "%{$bankSearch}%")
-                ->orWhere('ticket_number', $bankSearch)
-                ->orWhereHas('transaction', fn ($q) => $q->where('bank_reference', 'like', "%{$bankSearch}%")))
             ->when($status === 'excluded', fn ($q) => $q->where('is_excluded', true))
             ->when($status === 'active', fn ($q) => $q->where('is_excluded', false))
-            ->orderBy('ticket_number')
-            ->paginate(50, ['id', 'lottery_id', 'transaction_id', 'phone', 'amount', 'ticket_number', 'is_excluded', 'created_at'], 'bank_page')
+            ->latest()
+            ->paginate(20, ['id', 'bank_reference', 'phone', 'amount', 'description', 'transacted_at', 'is_excluded'], 'transactions_page')
             ->withQueryString();
 
         return Inertia::render('admin/lotteries/import', [
@@ -67,13 +50,66 @@ class ImportController extends Controller
                 'active_count' => $activeCount,
                 'transactions_count' => $transactionsCount,
             ],
-            'recentTickets' => $recentTickets,
             'recentTransactions' => $recentTransactions,
+            'filters' => [
+                'search' => $search,
+                'status' => $status,
+            ],
+        ]);
+    }
+
+    public function bankIndex(Request $request, Lottery $lottery): Response
+    {
+        $search = $request->string('search')->trim()->value();
+        $status = $request->string('status')->trim()->value();
+
+        $bankEntries = $lottery->bankEntries()
+            ->with('transaction:id,bank_reference,description,transacted_at')
+            ->when($search, fn ($q) => $q->where('phone', 'like', "%{$search}%")
+                ->orWhere('ticket_number', $search)
+                ->orWhereHas('transaction', fn ($q) => $q->where('bank_reference', 'like', "%{$search}%")))
+            ->when($status === 'excluded', fn ($q) => $q->where('is_excluded', true))
+            ->when($status === 'active', fn ($q) => $q->where('is_excluded', false))
+            ->orderBy('ticket_number')
+            ->paginate(100, ['id', 'lottery_id', 'transaction_id', 'phone', 'amount', 'ticket_number', 'is_excluded', 'created_at'], 'page')
+            ->withQueryString();
+
+        return Inertia::render('admin/lotteries/bank', [
+            'lottery' => [
+                'id' => $lottery->id,
+                'name' => $lottery->name,
+                'price_per_ticket' => $lottery->price_per_ticket,
+            ],
             'bankEntries' => $bankEntries,
             'filters' => [
                 'search' => $search,
-                'bank_search' => $bankSearch,
                 'status' => $status,
+            ],
+        ]);
+    }
+
+    public function ticketsIndex(Request $request, Lottery $lottery): Response
+    {
+        $lottery->loadCount('tickets');
+
+        $search = $request->string('search')->trim()->value();
+
+        $tickets = $lottery->tickets()
+            ->when($search, fn ($q) => $q->where('phone', 'like', "%{$search}%")
+                ->orWhere('ticket_number', $search))
+            ->orderBy('ticket_number')
+            ->paginate(100, ['id', 'ticket_number', 'phone', 'created_at'], 'page')
+            ->withQueryString();
+
+        return Inertia::render('admin/lotteries/tickets', [
+            'lottery' => [
+                'id' => $lottery->id,
+                'name' => $lottery->name,
+                'tickets_count' => $lottery->tickets_count,
+            ],
+            'tickets' => $tickets,
+            'filters' => [
+                'search' => $search,
             ],
         ]);
     }
